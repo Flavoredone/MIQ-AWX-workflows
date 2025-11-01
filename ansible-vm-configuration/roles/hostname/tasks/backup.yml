@@ -1,0 +1,23 @@
+---
+- name: Create backup directory
+  file:
+    path: "{{ backup_dir }}/hostname"
+    state: directory
+    mode: '0755'
+  when: hostname_backup and hostname_change_needed
+
+- name: Backup hostname file
+  copy:
+    src: /etc/hostname
+    dest: "{{ backup_dir }}/hostname/hostname.backup-{{ ansible_date_time.epoch }}"
+    remote_src: yes
+    backup: yes
+  when: hostname_backup and hostname_change_needed
+
+- name: Backup hosts file
+  copy:
+    src: /etc/hosts
+    dest: "{{ backup_dir }}/hostname/hosts.backup-{{ ansible_date_time.epoch }}"
+    remote_src: yes
+    backup: yes
+  when: hostname_backup and hostname_change_needed

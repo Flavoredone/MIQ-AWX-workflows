@@ -1,0 +1,9 @@
+---
+# Специфичные настройки для vm01
+hostname: "vm01-prod"
+ip_address: "192.168.1.10"
+gateway: "192.168.1.1"
+dns_servers:
+  - "8.8.8.8"
+  - "8.8.4.4"
+network_interface: "ens192"

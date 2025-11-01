@@ -1,0 +1,34 @@
+---
+- name: Validate hostname parameter
+  fail:
+    msg: "Hostname must be specified"
+  when: hostname is not defined or hostname | length == 0
+
+- name: Validate hostname format
+  fail:
+    msg: "Hostname '{{ hostname }}' must be alphanumeric with hyphens (1-63 chars)"
+  when: not hostname | regex_match('^[a-zA-Z0-9-]{1,63}$')
+
+- name: Check current hostname
+  command: hostname -f
+  register: current_hostname_result
+  changed_when: false
+  ignore_errors: true
+
+- name: Set current hostname fact
+  set_fact:
+    current_hostname: "{{ current_hostname_result.stdout }}"
+  
+- name: Debug hostname information
+  debug:
+    msg: "Current: {{ current_hostname }}, New: {{ hostname }}"
+  changed_when: false
+
+- name: Check if change is needed
+  set_fact:
+    hostname_change_needed: "{{ current_hostname != hostname }}"
+
+- name: Skip if no change needed
+  debug:
+    msg: "Hostname already set to '{{ hostname }}'. Skipping."
+  when: not hostname_change_needed

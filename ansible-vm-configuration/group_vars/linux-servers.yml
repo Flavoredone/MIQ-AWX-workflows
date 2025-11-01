@@ -1,0 +1,12 @@
+---
+# Настройки для Linux серверов
+network_manager_priority:
+  - "netplan"
+  - "networkmanager" 
+  - "systemd-networkd"
+  - "traditional"
+
+supported_os_families:
+  - "Debian"
+  - "RedHat"
+  - "SUSE"

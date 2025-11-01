@@ -1,0 +1,12 @@
+---
+# Общие переменные для всех хостов
+ansible_user: ansible
+ansible_ssh_private_key_file: ~/.ssh/ansible_key
+ansible_connection: ssh
+
+# Настройки по умолчанию
+dns_servers_default:
+  - "8.8.8.8"
+  - "8.8.4.4"
+dns_search_domains_default:
+  - "company.local"

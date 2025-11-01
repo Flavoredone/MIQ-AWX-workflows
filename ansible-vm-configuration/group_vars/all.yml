@@ -1,0 +1,14 @@
+---
+# Общие настройки для всех хостов
+ansible_python_interpreter: /usr/bin/python3
+backup_dir: "/tmp/ansible-backups"
+connection_timeout: 60
+
+# Настройки по умолчанию для сети
+default_interface: "ens192"
+default_netmask: "255.255.255.0"
+default_dns_search: "example.com"
+
+# Настройки безопасности
+max_backup_files: 10
+validation_enabled: true

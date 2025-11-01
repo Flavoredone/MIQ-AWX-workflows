@@ -1,0 +1,12 @@
+---
+# Конфигурация для хоста
+hostname: "prod-web-01"
+network_interface: "ens192"
+ip_address: "192.168.1.100"
+subnet_cidr: "24"
+gateway: "192.168.1.1"
+dns_servers:
+  - "192.168.1.10"
+  - "8.8.8.8"
+dns_search_domains:
+  - "company.local"

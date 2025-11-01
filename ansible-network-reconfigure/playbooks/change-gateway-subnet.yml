@@ -1,0 +1,237 @@
+---
+- name: Change Gateway and Netmask
+  hosts: "{{ target_hosts | default('all') }}"
+  become: true
+  # vars:
+  #   target_interface: "ens192"
+  #   new_gateway: "192.168.1.1"
+  #   new_netmask: "255.255.255.0"
+  #   backup_dir: "/tmp/backups"
+  
+  tasks:
+    - name: Validate required parameters
+      fail:
+        msg: "target_interface, new_gateway, and new_netmask variables must be defined"
+      when: 
+        - target_interface is not defined
+        - new_gateway is not defined
+        - new_netmask is not defined
+    
+    - name: Validate gateway format
+      fail:
+        msg: "Gateway '{{ new_gateway }}' is not a valid IPv4 address"
+      when: not new_gateway | ipv4
+    
+    - name: Validate netmask format
+      fail:
+        msg: "Netmask '{{ new_netmask }}' is not valid"
+      when: not new_netmask | ipv4
+    
+    - name: Check if network interface exists
+      shell: "ip link show {{ target_interface }}"
+      register: interface_check
+      ignore_errors: true
+      changed_when: false
+    
+    - name: Fail if interface doesn't exist
+      fail:
+        msg: "Network interface '{{ target_interface }}' does not exist"
+      when: interface_check.rc != 0
+    
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Get current gateway
+      shell: "ip route | grep default | awk '{print $3}' | head -1"
+      register: current_gateway
+      changed_when: false
+    
+    - name: Get current netmask
+      shell: "ip -4 addr show {{ target_interface }} | grep inet | awk '{print $2}' | cut -d/ -f2"
+      register: current_netmask
+      changed_when: false
+    
+    - name: Display current gateway and netmask
+      debug:
+        msg: |
+          Interface: {{ target_interface }}
+          Current Gateway: {{ current_gateway.stdout | default('Not set') }}
+          Current Netmask: {{ current_netmask.stdout | default('Not set') }}
+          New Gateway: {{ new_gateway }}
+          New Netmask: {{ new_netmask }} (prefix: {{ new_netmask | ipaddr('prefix') }})
+    
+    - name: Check if changes are needed
+      set_fact:
+        changes_needed: "{{ current_gateway.stdout != new_gateway or current_netmask.stdout != (new_netmask | ipaddr('prefix')) }}"
+    
+    - name: Skip if no changes needed
+      debug:
+        msg: "Gateway and netmask are already set to desired values. No changes needed."
+      when: not changes_needed
+    
+    - name: Abort if no changes needed
+      meta: end_play
+      when: not changes_needed
+    
+    - name: Detect network configuration method
+      set_fact:
+        network_manager: >-
+          {% set managers = {
+            '/etc/netplan': 'netplan',
+            '/etc/NetworkManager': 'networkmanager', 
+            '/etc/systemd/network': 'systemd-networkd'
+          } %}
+          {% for path, manager in managers.items() %}
+            {% if lookup('file', path) != '' %}{{ manager }}{% endif %}
+          {% endfor %}{{ 'traditional' }}
+    
+    - name: Backup current network configuration
+      archive:
+        path:
+          - /etc/netplan
+          - /etc/network
+          - /etc/sysconfig/network-scripts
+          - /etc/systemd/network
+        dest: "{{ backup_dir }}/network-gateway-backup-{{ ansible_date_time.epoch }}.tar.gz"
+        remove: no
+    
+    - name: Remove old default gateway
+      shell: "ip route del default 2>/dev/null || true"
+      ignore_errors: true
+      when: current_gateway.stdout is defined
+    
+    - name: Add new default gateway
+      shell: "ip route add default via {{ new_gateway }} dev {{ target_interface }}"
+      when: changes_needed
+    
+    - name: Configure gateway and netmask via Netplan
+      block:
+        - name: Find Netplan config
+          find:
+            paths: /etc/netplan
+            patterns: "*.yaml,*.yml"
+            file_type: file
+          register: netplan_configs
+        
+        - name: Update Netplan gateway
+          replace:
+            path: "{{ netplan_configs.files.0.path }}"
+            regexp: "\\s+via:\\s+[0-9.]+"
+            replace: "      via: {{ new_gateway }}"
+            backup: true
+          when: netplan_configs.files | length > 0
+        
+        - name: Update Netplan netmask
+          replace:
+            path: "{{ netplan_configs.files.0.path }}"
+            regexp: "      addresses:\\s+\\[.*/\\d+\\]"
+            replace: "      addresses: [{{ ansible_default_ipv4.address }}/{{ new_netmask | ipaddr('prefix') }}]"
+            backup: true
+          when: netplan_configs.files | length > 0
+        
+        - name: Apply Netplan changes
+          command: netplan apply
+      
+      when: network_manager == "netplan" and changes_needed
+    
+    - name: Configure gateway via NetworkManager
+      block:
+        - name: Get active connection
+          command: nmcli -t -f NAME con show --active
+          register: nm_active_conn
+          changed_when: false
+        
+        - name: Update gateway in NetworkManager
+          nmcli:
+            conn_name: "{{ nm_active_conn.stdout_lines[0] }}"
+            gw4: "{{ new_gateway }}"
+            state: present
+        
+        - name: Update netmask in NetworkManager
+          nmcli:
+            conn_name: "{{ nm_active_conn.stdout_lines[0] }}"
+            ip4: "{{ ansible_default_ipv4.address }}/{{ new_netmask | ipaddr('prefix') }}"
+            state: present
+        
+        - name: Restart connection
+          nmcli:
+            conn_name: "{{ nm_active_conn.stdout_lines[0] }}"
+            state: restart
+      
+      when: network_manager == "networkmanager" and changes_needed
+    
+    - name: Configure gateway via traditional methods
+      block:
+        - name: Update Debian/Ubuntu interfaces
+          replace:
+            path: /etc/network/interfaces
+            regexp: "gateway\\s+[0-9.]+"
+            replace: "gateway {{ new_gateway }}"
+          when: ansible_os_family == "Debian"
+        
+        - name: Update Debian/Ubuntu netmask
+          replace:
+            path: /etc/network/interfaces
+            regexp: "netmask\\s+[0-9.]+"
+            replace: "netmask {{ new_netmask }}"
+          when: ansible_os_family == "Debian"
+        
+        - name: Update RHEL/CentOS gateway
+          lineinfile:
+            path: "/etc/sysconfig/network-scripts/ifcfg-{{ target_interface }}"
+            regexp: "GATEWAY=.*"
+            line: "GATEWAY={{ new_gateway }}"
+          when: ansible_os_family == "RedHat"
+        
+        - name: Update RHEL/CentOS netmask
+          lineinfile:
+            path: "/etc/sysconfig/network-scripts/ifcfg-{{ target_interface }}"
+            regexp: "NETMASK=.*"
+            line: "NETMASK={{ new_netmask }}"
+          when: ansible_os_family == "RedHat"
+        
+        - name: Restart network service
+          service:
+            name: "{{ 'networking' if ansible_os_family == 'Debian' else 'network' }}"
+            state: restarted
+      
+      when: network_manager == "traditional" and changes_needed
+    
+    - name: Wait for network stabilization
+      wait_for_connection:
+        timeout: 30
+      become: false
+    
+    - name: Verify new gateway
+      shell: "ip route | grep default | awk '{print $3}' | head -1"
+      register: verified_gateway
+      changed_when: false
+    
+    - name: Verify new netmask
+      shell: "ip -4 addr show {{ target_interface }} | grep inet | awk '{print $2}' | cut -d/ -f2"
+      register: verified_netmask
+      changed_when: false
+    
+    - name: Display gateway and netmask change results
+      debug:
+        msg: |
+          Gateway and Netmask change completed:
+          - New Gateway: {{ verified_gateway.stdout }}
+          - Expected Gateway: {{ new_gateway }}
+          - New Netmask Prefix: {{ verified_netmask.stdout }}
+          - Expected Netmask Prefix: {{ new_netmask | ipaddr('prefix') }}
+          - Gateway Status: {{ 'SUCCESS' if verified_gateway.stdout == new_gateway else 'FAILED' }}
+          - Netmask Status: {{ 'SUCCESS' if verified_netmask.stdout == (new_netmask | ipaddr('prefix')) else 'FAILED' }}
+    
+    - name: Test external connectivity
+      shell: "ping -c 2 -W 1 {{ new_gateway }}"
+      register: gateway_ping_test
+      ignore_errors: true
+      changed_when: false
+    
+    - name: Display connectivity test results
+      debug:
+        msg: "Gateway connectivity: {{ 'REACHABLE' if gateway_ping_test.rc == 0 else 'UNREACHABLE' }}"

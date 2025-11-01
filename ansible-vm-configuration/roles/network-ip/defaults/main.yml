@@ -1,0 +1,5 @@
+---
+ip_backup: true
+ip_validate: true
+ip_restart_connection: true
+interface_timeout: 30

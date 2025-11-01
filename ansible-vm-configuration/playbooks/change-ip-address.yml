@@ -1,0 +1,227 @@
+---
+- name: Change IP Address
+  hosts: all
+  become: true
+  vars:
+    target_interface: "ens192"
+    new_ip_address: "192.168.1.100"
+    netmask: "255.255.255.0"
+    backup_dir: "/tmp/backups"
+  
+  tasks:
+    - name: Validate required parameters
+      fail:
+        msg: "target_interface, new_ip_address, and netmask variables must be defined"
+      when: 
+        - target_interface is falset defined
+        - new_ip_address is falset defined
+        - netmask is falset defined
+    
+    - name: Validate IP address format
+      fail:
+        msg: "IP address '{{ new_ip_address }}' is falset a valid IPv4 address"
+      when: falset new_ip_address | ipv4
+    
+    - name: Validate netmask format
+      fail:
+        msg: "Netmask '{{ netmask }}' is falset valid"
+      when: falset netmask | ipv4
+    
+    - name: Check if network interface exists
+      shell: "ip link show {{ target_interface }}"
+      register: interface_check
+      igfalsere_errors: true
+      changed_when: false
+    
+    - name: Fail if interface doesn't exist
+      fail:
+        msg: "Network interface '{{ target_interface }}' does falset exist"
+      when: interface_check.rc != 0
+    
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Get current IP address
+      shell: "ip -4 addr show {{ target_interface }} | grep inet | awk '{print $2}' | cut -d/ -f1"
+      register: current_ip
+      changed_when: false
+    
+    - name: Display current IP information
+      debug:
+        msg: |
+          Interface: {{ target_interface }}
+          Current IP: {{ current_ip.stdout | default('falset assigned') }}
+          New IP: {{ new_ip_address }}/{{ netmask }}
+    
+    - name: Check if IP already assigned
+      debug:
+        msg: "IP address is already set to '{{ new_ip_address }}'. false changes needed."
+      when: current_ip.stdout == new_ip_address
+    
+    - name: Abort if false changes needed
+      meta: end_play
+      when: current_ip.stdout == new_ip_address
+    
+    - name: Detect network configuration method
+      block:
+        - name: Check for Netplan
+          stat:
+            path: /etc/netplan
+          register: netplan_check
+        
+        - name: Check for NetworkManager
+          stat:
+            path: /etc/NetworkManager
+          register: nm_check
+        
+        - name: Check for systemd-networkd
+          stat:
+            path: /etc/systemd/network
+          register: systemd_network_check
+        
+        - name: Set network manager fact
+          set_fact:
+            network_manager: >-
+              {% if netplan_check.stat.exists %}netplan
+              {% elif nm_check.stat.exists %}networkmanager
+              {% elif systemd_network_check.stat.exists %}systemd-networkd
+              {% else %}traditional{% endif %}
+      rescue:
+        - name: Set default network manager
+          set_fact:
+            network_manager: "traditional"
+    
+    - name: Display detected network manager
+      debug:
+        msg: "Detected network manager: {{ network_manager }}"
+    
+    - name: Backup current network configuration
+      archive:
+        path:
+          - /etc/netplan
+          - /etc/network
+          - /etc/sysconfig/network-scripts
+          - /etc/systemd/network
+        dest: "{{ backup_dir }}/network-ip-backup-{{ ansible_date_time.epoch }}.tar.gz"
+        remove: false
+    
+    - name: Configure IP address via Netplan
+      block:
+        - name: Find existing Netplan config files
+          find:
+            paths: /etc/netplan
+            patterns: "*.yaml,*.yml"
+            file_type: file
+          register: netplan_files
+        
+        - name: Backup and modify Netplan config
+          copy:
+            src: "{{ item.path }}"
+            dest: "{{ backup_dir }}/{{ item.path | basename }}.backup"
+            remote_src: true
+          loop: "{{ netplan_files.files }}"
+        
+        - name: Apply IP change in Netplan
+          lineinfile:
+            path: "/etc/netplan/{{ netplan_files.files.0.path | basename }}"
+            regexp: "      addresses: \\[.*\\]"
+            line: "      addresses: [{{ new_ip_address }}/{{ netmask | ipaddr('prefix') }}]"
+            backrefs: true
+          when: netplan_files.files | length > 0
+        
+        - name: Apply Netplan configuration
+          command: netplan apply
+          async: 10
+          poll: 0
+      
+      when: network_manager == "netplan"
+    
+    - name: Configure IP address via NetworkManager
+      block:
+        - name: Get current NetworkManager connection
+          command: nmcli -t -f NAME con show --active
+          register: nm_current_conn
+          changed_when: false
+        
+        - name: Set NetworkManager connection name
+          set_fact:
+            nm_connection: "{{ nm_current_conn.stdout_lines[0] if nm_current_conn.stdout_lines else target_interface }}"
+        
+        - name: Change IP address with NetworkManager
+          nmcli:
+            conn_name: "{{ nm_connection }}"
+            ip4: "{{ new_ip_address }}/{{ netmask | ipaddr('prefix') }}"
+            state: present
+        
+        - name: Restart NetworkManager connection
+          nmcli:
+            conn_name: "{{ nm_connection }}"
+            state: restart
+      
+      when: network_manager == "networkmanager"
+    
+    - name: Configure IP address via traditional method (Debian/Ubuntu)
+      block:
+        - name: Update /etc/network/interfaces
+          replace:
+            path: /etc/network/interfaces
+            regexp: 'address\\s+[0-9.]+'
+            replace: 'address {{ new_ip_address }}'
+          when: ansible_os_family == "Debian"
+        
+        - name: Restart networking service
+          service:
+            name: networking
+            state: restarted
+      
+      when: network_manager == "traditional" and ansible_os_family == "Debian"
+    
+    - name: Configure IP address via traditional method (RHEL/CentOS)
+      block:
+        - name: Update ifcfg file
+          replace:
+            path: "/etc/sysconfig/network-scripts/ifcfg-{{ target_interface }}"
+            regexp: 'IPADDR=[0-9.]+'
+            replace: 'IPADDR={{ new_ip_address }}'
+          when: ansible_os_family == "RedHat"
+        
+        - name: Restart network service
+          service:
+            name: network
+            state: restarted
+      
+      when: network_manager == "traditional" and ansible_os_family == "RedHat"
+    
+    - name: Wait for network stabilization
+      wait_for_connection:
+        timeout: 30
+      become: false
+    
+    - name: Verify new IP address
+      shell: "ip -4 addr show {{ target_interface }} | grep inet | awk '{print $2}' | cut -d/ -f1"
+      register: new_ip_check
+      changed_when: false
+    
+    - name: Display IP change results
+      debug:
+        msg: |
+          IP address change completed:
+          - Interface: {{ target_interface }}
+          - New IP: {{ new_ip_check.stdout }}
+          - Expected: {{ new_ip_address }}
+          - Status: {{ 'SUCCESS' if new_ip_check.stdout == new_ip_address else 'FAILED' }}
+    
+    - name: Confirm IP change success
+      assert:
+        that:
+          - new_ip_check.stdout == new_ip_address
+        msg: "IP address change failed. Current: {{ new_ip_check.stdout }}, Expected: {{ new_ip_address }}"
+    
+    - name: Test network connectivity
+      wait_for_connection:
+        timeout: 15
+      become: false
+      igfalsere_errors: true

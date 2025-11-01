@@ -1,0 +1,24 @@
+---
+# Общие переменные для всех хостов
+ansible_user: ansible
+ansible_ssh_private_key_file: ~/.ssh/ansible_key
+ansible_connection: ssh
+
+# Change DNS Servers
+new_dns_servers:
+  - "8.8.8.8"
+  - "8.8.4.4"
+new_dns_search: "localdomain"
+backup_dir: "/tmp/backups"
+
+# Change Gateway and Netmask
+target_interface: "ens192"
+new_gateway: "192.168.1.1"
+new_netmask: "255.255.255.0"
+
+# Change VM Hostname
+new_hostname: "new-vm-hostname"
+
+# Change IP Address
+new_ip_address: "192.168.1.100"
+netmask: "255.255.255.0"

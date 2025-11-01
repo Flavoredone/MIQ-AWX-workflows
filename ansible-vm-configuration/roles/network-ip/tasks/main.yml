@@ -1,0 +1,20 @@
+---
+- name: Include network validation
+  include_tasks: validate.yml
+  tags: validation
+
+- name: Include network backup
+  include_tasks: backup.yml
+  tags: backup
+
+- name: Detect network manager
+  include_tasks: detect-manager.yml
+  tags: detection
+
+- name: Configure IP address
+  include_tasks: "configure-{{ network_manager }}.yml"
+  tags: configuration
+
+- name: Verify IP changes
+  include_tasks: verify.yml
+  tags: verification

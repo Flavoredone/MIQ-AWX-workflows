@@ -1,0 +1,4 @@
+---
+hostname_backup: true
+hostname_validate: true
+update_hosts_file: true

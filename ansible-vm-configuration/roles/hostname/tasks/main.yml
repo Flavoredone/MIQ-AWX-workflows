@@ -1,0 +1,16 @@
+---
+- name: Include validation tasks
+  include_tasks: validate.yml
+  tags: validation
+
+- name: Include backup tasks
+  include_tasks: backup.yml
+  tags: backup
+
+- name: Include configuration tasks
+  include_tasks: configure.yml
+  tags: configuration
+
+- name: Include verification tasks
+  include_tasks: verify.yml
+  tags: verification

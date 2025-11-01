@@ -1,0 +1,10 @@
+network:
+  version: 2
+  ethernets:
+    {{ network_interface }}:
+      dhcp4: no
+      addresses: [{{ ip_address }}/{{ subnet_cidr }}]
+      gateway4: {{ gateway }}
+      nameservers:
+        addresses: [{{ dns_servers | join(', ') }}]
+        search: [{{ dns_search_domains | join(', ') }}]

@@ -1,0 +1,243 @@
+---
+- name: Change DNS Servers
+  hosts: "{{ target_hosts | default('all') }}"
+  become: true
+  # vars:
+  #   new_dns_servers:
+  #     - "8.8.8.8"
+  #     - "8.8.4.4"
+  #   new_dns_search: "localdomain"
+  #   backup_dir: "/tmp/backups"
+  
+  tasks:
+    - name: Validate DNS servers parameter
+      fail:
+        msg: "new_dns_servers variable must be defined and contain at least one DNS server"
+      when: new_dns_servers is not defined or new_dns_servers | length == 0
+    
+    - name: Validate DNS servers format
+      fail:
+        msg: "All DNS servers must be valid IPv4 addresses"
+      when: new_dns_servers | select('ipv4') | list | length != new_dns_servers | length
+    
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+    
+    - name: Get current DNS configuration
+      shell: |
+        cat /etc/resolv.conf | grep nameserver | awk '{print $2}' | tr '\n' ' '
+      register: current_dns_servers
+      changed_when: false
+    
+    - name: Get current DNS search domains
+      shell: |
+        cat /etc/resolv.conf | grep search | awk '{$1=""; print $0}' | sed 's/^ *//' || echo ""
+      register: current_dns_search
+      changed_when: false
+    
+    - name: Display current DNS configuration
+      debug:
+        msg: |
+          Current DNS Servers: {{ current_dns_servers.stdout | trim }}
+          Current DNS Search: {{ current_dns_search.stdout | trim }}
+          New DNS Servers: {{ new_dns_servers | join(', ') }}
+          New DNS Search: {{ new_dns_search }}
+    
+    - name: Detect DNS configuration method
+      block:
+        - name: Check for systemd-resolved
+          stat:
+            path: /etc/systemd/resolved.conf
+          register: systemd_resolved_check
+        
+        - name: Check for NetworkManager
+          stat:
+            path: /etc/NetworkManager
+          register: nm_check
+        
+        - name: Check for resolvconf
+          stat:
+            path: /etc/resolvconf
+          register: resolvconf_check
+        
+        - name: Set DNS manager fact
+          set_fact:
+            dns_manager: >-
+              {% if systemd_resolved_check.stat.exists %}systemd-resolved
+              {% elif nm_check.stat.exists %}networkmanager
+              {% elif resolvconf_check.stat.exists %}resolvconf
+              {% else %}static{% endif %}
+      rescue:
+        - name: Set default DNS manager
+          set_fact:
+            dns_manager: "static"
+    
+    - name: Display detected DNS manager
+      debug:
+        msg: "Detected DNS configuration method: {{ dns_manager }}"
+    
+    - name: Backup current DNS configuration
+      archive:
+        path:
+          - /etc/resolv.conf
+          - /etc/systemd/resolved.conf
+          - /etc/NetworkManager
+          - /etc/resolvconf
+        dest: "{{ backup_dir }}/dns-backup-{{ ansible_date_time.epoch }}.tar.gz"
+        remove: no
+    
+    - name: Configure DNS via systemd-resolved
+      block:
+        - name: Update systemd-resolved configuration
+          copy:
+            content: |
+              [Resolve]
+              DNS={{ new_dns_servers | join(' ') }}
+              Domains={{ new_dns_search }}
+              FallbackDNS=1.1.1.1 1.0.0.1
+              DNSSEC=allow-downgrade
+            dest: /etc/systemd/resolved.conf
+            owner: root
+            group: root
+            mode: '0644'
+        
+        - name: Restart systemd-resolved service
+          service:
+            name: systemd-resolved
+            state: restarted
+        
+        - name: Update symlink for resolv.conf
+          file:
+            src: /run/systemd/resolve/stub-resolv.conf
+            dest: /etc/resolv.conf
+            state: link
+            force: yes
+      
+      when: dns_manager == "systemd-resolved"
+    
+    - name: Configure DNS via NetworkManager
+      block:
+        - name: Get active connection
+          command: nmcli -t -f NAME con show --active
+          register: nm_active_conn
+          changed_when: false
+        
+        - name: Update DNS in NetworkManager
+          nmcli:
+            conn_name: "{{ nm_active_conn.stdout_lines[0] }}"
+            dns4: "{{ new_dns_servers | join(',') }}"
+            state: present
+        
+        - name: Update DNS search domains
+          nmcli:
+            conn_name: "{{ nm_active_conn.stdout_lines[0] }}"
+            dns4_search: "{{ new_dns_search }}"
+            state: present
+        
+        - name: Restart NetworkManager connection
+          nmcli:
+            conn_name: "{{ nm_active_conn.stdout_lines[0] }}"
+            state: restart
+      
+      when: dns_manager == "networkmanager"
+    
+    - name: Configure DNS via resolvconf
+      block:
+        - name: Update resolvconf base configuration
+          copy:
+            content: |
+              name_servers="{{ new_dns_servers | join(' ') }}"
+              search_domains="{{ new_dns_search }}"
+            dest: /etc/resolvconf/resolv.conf.d/base
+            owner: root
+            group: root
+            mode: '0644'
+        
+        - name: Update resolvconf
+          command: resolvconf -u
+      
+      when: dns_manager == "resolvconf"
+    
+    - name: Configure DNS via static resolv.conf
+      block:
+        - name: Create new resolv.conf
+          copy:
+            content: |
+              # Generated by Ansible
+              {% for server in new_dns_servers %}
+              nameserver {{ server }}
+              {% endfor %}
+              search {{ new_dns_search }}
+              options timeout:2
+              options attempts:3
+            dest: /etc/resolv.conf
+            owner: root
+            group: root
+            mode: '0644'
+        
+        - name: Make resolv.conf immutable
+          command: chattr +i /etc/resolv.conf
+          ignore_errors: true
+      
+      when: dns_manager == "static"
+    
+    - name: Wait for DNS service stabilization
+      pause:
+        seconds: 5
+    
+    - name: Verify new DNS configuration
+      shell: |
+        cat /etc/resolv.conf | grep nameserver | awk '{print $2}' | tr '\n' ' '
+      register: verified_dns_servers
+      changed_when: false
+    
+    - name: Verify DNS search domains
+      shell: |
+        cat /etc/resolv.conf | grep search | awk '{$1=""; print $0}' | sed 's/^ *//' || echo ""
+      register: verified_dns_search
+      changed_when: false
+    
+    - name: Test DNS resolution
+      block:
+        - name: Test DNS resolution for google.com
+          shell: "nslookup google.com"
+          register: dns_test
+          changed_when: false
+          ignore_errors: true
+        
+        - name: Test DNS resolution with new servers
+          shell: "nslookup google.com {{ new_dns_servers[0] }}"
+          register: dns_specific_test
+          changed_when: false
+          ignore_errors: true
+      
+      rescue:
+        - name: DNS test failed
+          debug:
+            msg: "DNS resolution test failed, but configuration might still be applied"
+            level: warning
+    
+    - name: Display DNS change results
+      debug:
+        msg: |
+          DNS configuration change completed:
+          - New DNS Servers: {{ verified_dns_servers.stdout | trim }}
+          - Expected DNS Servers: {{ new_dns_servers | join(' ') }}
+          - New DNS Search: {{ verified_dns_search.stdout | trim }}
+          - Expected DNS Search: {{ new_dns_search }}
+          - DNS Resolution Test: {{ 'SUCCESS' if dns_test.rc == 0 else 'FAILED' }}
+    
+    - name: Verify DNS servers are set correctly
+      assert:
+        that:
+          - verified_dns_servers.stdout | trim != ""
+        msg: "DNS servers were not configured correctly"
+    
+    - name: Final DNS functionality check
+      debug:
+        msg: |
+          DNS configuration applied successfully.
+          Note: Some applications may need to be restarted to use new DNS settings.

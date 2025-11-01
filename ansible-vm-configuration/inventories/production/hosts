@@ -1,0 +1,15 @@
+[linux-servers]
+vm01.example.com ansible_host=192.168.1.10
+vm02.example.com ansible_host=192.168.1.11
+
+[web-servers]
+vm01.example.com
+
+[db-servers] 
+vm02.example.com
+
+[linux-servers:vars]
+ansible_connection=ssh
+ansible_user=ansible-user
+ansible_ssh_private_key_file=~/.ssh/ansible_key
+backup_dir=/tmp/ansible-backups
