@@ -1,0 +1,56 @@
+all:
+  children:
+    web_servers:
+      hosts:
+        web1.prod.example.com:
+          ansible_host: 10.1.1.10
+          http_port: 80
+          service_name: nginx
+        web2.prod.example.com:
+          ansible_host: 10.1.1.11
+          http_port: 8080
+          service_name: nginx
+      vars:  
+        ansible_user: admin
+        package_name: nginx
+        max_connections: 1000
+        backup_enabled: true
+    
+    db_servers:
+      hosts:
+        db-master.prod.example.com:
+          ansible_host: 10.1.2.10
+          db_role: master
+        db-slave.prod.example.com:
+          ansible_host: 10.1.2.11
+          db_role: slave
+      vars:
+        ansible_user: dbadmin
+        db_engine: postgresql
+        db_version: "14"
+        backup_schedule: "0 2 * * *"
+  
+  vars:
+    # Общие переменные для всех хостов
+    ansible_user: ansible
+    ansible_ssh_private_key_file: ~/.ssh/ansible_key
+    ansible_connection: ssh
+
+    # Change DNS Servers
+    new_dns_servers:
+      - "8.8.8.8"
+      - "8.8.4.4"
+    new_dns_search: "localdomain"
+    backup_dir: "/tmp/backups"
+
+    # Change Gateway and Netmask
+    target_interface: "ens192"
+    new_gateway: "192.168.1.1"
+    new_netmask: "255.255.255.0"
+
+    # Change VM Hostname
+    new_hostname: "new-vm-hostname"
+
+    # Change IP Address
+    new_ip_address: "192.168.1.100"
+    netmask: "255.255.255.0"
