@@ -13,37 +13,29 @@
       debug:
         msg: "Current IP on {{ target_interface }}: {{ ip_show.stdout }}"
     
-    - name: Create backup of network config
+    - name: Backup current netplan config
       copy:
-        src: /etc/netplan/
-        dest: /tmp/backup-netplan-{{ ansible_date_time.epoch }}
+        src: /etc/netplan/50-cloud-init.yaml
+        dest: /tmp/50-cloud-init.yaml.backup
         remote_src: true
-      ignore_errors: true
+        backup: yes
     
-    - name: Update Netplan config with new IP
-      lineinfile:
+    - name: Update Netplan config with new IP (preserving structure)
+      replace:
         path: /etc/netplan/50-cloud-init.yaml
-        regexp: '      addresses:'
-        line: "      addresses: [{{ new_ip_address }}/24]"
-        backrefs: yes
-      when: ansible_os_family == "Debian"
+        regexp: '            dhcp4: true'
+        replace: '            dhcp4: false\n            addresses: [{{ new_ip_address }}/24]'
     
-    - name: Update ifcfg file (RHEL/CentOS)
-      lineinfile:
-        path: "/etc/sysconfig/network-scripts/ifcfg-{{ target_interface }}"
-        regexp: 'IPADDR='
-        line: "IPADDR={{ new_ip_address }}"
-      when: ansible_os_family == "RedHat"
+    - name: Fix Netplan file permissions
+      file:
+        path: /etc/netplan/50-cloud-init.yaml
+        mode: '0600'
+        owner: root
+        group: root
     
     - name: Apply network changes
       command: netplan apply
-      when: ansible_os_family == "Debian"
-    
-    - name: Restart network (RHEL/CentOS)
-      service:
-        name: network
-        state: restarted
-      when: ansible_os_family == "RedHat"
+      become: true
     
     - name: Wait a bit for network
       pause:
