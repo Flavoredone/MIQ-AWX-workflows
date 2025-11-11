@@ -159,4 +159,3 @@
     - name: Notify about reboot requirement
       debug:
         msg: "Hostname has been changed. Some applications may require a reboot to fully recognize the new hostname."
-        level: warning
