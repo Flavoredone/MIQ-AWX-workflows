@@ -14,32 +14,15 @@
         msg: "Current IP on {{ target_interface }}: {{ ip_show.stdout }}"
     
     - name: Backup current netplan config
-      copy:
-        src: /etc/netplan/50-cloud-init.yaml
-        dest: /tmp/50-cloud-init.yaml.backup
-        remote_src: true
-        backup: yes
+      shell: sudo cp /etc/netplan/50-cloud-init.yaml /tmp/50-cloud-init.yaml.backup
     
-    - name: Read current netplan config
-      slurp:
-        src: /etc/netplan/50-cloud-init.yaml
-      register: netplan_content
-    
-    - name: Create new netplan config with static IP
-      copy:
-        content: "{{ (netplan_content.content | b64decode).replace('dhcp4: true', 'dhcp4: false\\n            addresses: [{{ new_ip_address }}/24]') }}"
-        dest: /tmp/50-cloud-init.yaml.new
-        mode: '0600'
-    
-    - name: Copy new config to netplan with sudo
+    - name: Update netplan config using sed
       shell: |
-        sudo cp /tmp/50-cloud-init.yaml.new /etc/netplan/50-cloud-init.yaml
+        sudo sed -i 's/dhcp4: true/dhcp4: false\n            addresses: [{{ new_ip_address }}\/24]/' /etc/netplan/50-cloud-init.yaml
         sudo chmod 600 /etc/netplan/50-cloud-init.yaml
-        sudo chown root:root /etc/netplan/50-cloud-init.yaml
     
     - name: Apply network changes
-      command: netplan apply
-      become: true
+      shell: sudo netplan apply
     
     - name: Wait a bit for network
       pause:
