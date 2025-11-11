@@ -28,8 +28,8 @@
                 gateway4: {{ gateway }}
                 {% endif %}
                 nameservers:
-                  addresses: [10.31.137.2]
-                  search: [cloud.lab]
+                  addresses: [{{ dns_servers | default('10.31.137.2') }}]
+                  search: [{{ dns_domain | default('cloud.lab') }}]
                 match:
                   macaddress: {{ mac_address }}
                 set-name: {{ target_interface }}
