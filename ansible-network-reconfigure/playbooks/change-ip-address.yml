@@ -13,34 +13,34 @@
       fail:
         msg: "target_interface, new_ip_address, and netmask variables must be defined"
       when: 
-        - target_interface is falset defined
-        - new_ip_address is falset defined
-        - netmask is falset defined
+        - target_interface is not defined
+        - new_ip_address is not defined
+        - netmask is not defined
     
     - name: Validate IP address format
       fail:
-        msg: "IP address '{{ new_ip_address }}' is falset a valid IPv4 address"
-      when: falset new_ip_address | ipv4
+        msg: "IP address '{{ new_ip_address }}' is not a valid IPv4 address"
+      when: not new_ip_address | ipv4
     
     - name: Validate netmask format
       fail:
-        msg: "Netmask '{{ netmask }}' is falset valid"
-      when: falset netmask | ipv4
+        msg: "Netmask '{{ netmask }}' is not valid"
+      when: not netmask | ipv4
     
     - name: Check if network interface exists
       shell: "ip link show {{ target_interface }}"
       register: interface_check
-      igfalsere_errors: true
+      ignore_errors: true
       changed_when: false
     
     - name: Fail if interface doesn't exist
       fail:
-        msg: "Network interface '{{ target_interface }}' does falset exist"
+        msg: "Network interface '{{ target_interface }}' does not exist"
       when: interface_check.rc != 0
     
     - name: Create backup directory
       file:
-        path: "{{ backup_dir }}"
+        path: "{{ backup_dir | default('/tmp/backups') }}"
         state: directory
         mode: '0755'
     
@@ -53,15 +53,15 @@
       debug:
         msg: |
           Interface: {{ target_interface }}
-          Current IP: {{ current_ip.stdout | default('falset assigned') }}
+          Current IP: {{ current_ip.stdout | default('not assigned') }}
           New IP: {{ new_ip_address }}/{{ netmask }}
     
     - name: Check if IP already assigned
       debug:
-        msg: "IP address is already set to '{{ new_ip_address }}'. false changes needed."
+        msg: "IP address is already set to '{{ new_ip_address }}'. No changes needed."
       when: current_ip.stdout == new_ip_address
     
-    - name: Abort if false changes needed
+    - name: Abort if no changes needed
       meta: end_play
       when: current_ip.stdout == new_ip_address
     
@@ -105,7 +105,7 @@
           - /etc/network
           - /etc/sysconfig/network-scripts
           - /etc/systemd/network
-        dest: "{{ backup_dir }}/network-ip-backup-{{ ansible_date_time.epoch }}.tar.gz"
+        dest: "{{ backup_dir | default('/tmp/backups') }}/network-ip-backup-{{ ansible_date_time.epoch }}.tar.gz"
         remove: false
     
     - name: Configure IP address via Netplan
@@ -120,7 +120,7 @@
         - name: Backup and modify Netplan config
           copy:
             src: "{{ item.path }}"
-            dest: "{{ backup_dir }}/{{ item.path | basename }}.backup"
+            dest: "{{ backup_dir | default('/tmp/backups') }}/{{ item.path | basename }}.backup"
             remote_src: true
           loop: "{{ netplan_files.files }}"
         
@@ -154,6 +154,7 @@
           nmcli:
             conn_name: "{{ nm_connection }}"
             ip4: "{{ new_ip_address }}/{{ netmask | ipaddr('prefix') }}"
+            gw4: "{{ gateway | default(omit) }}"
             state: present
         
         - name: Restart NetworkManager connection
@@ -172,6 +173,13 @@
             replace: 'address {{ new_ip_address }}'
           when: ansible_os_family == "Debian"
         
+        - name: Update netmask in /etc/network/interfaces
+          replace:
+            path: /etc/network/interfaces
+            regexp: 'netmask\\s+[0-9.]+'
+            replace: 'netmask {{ netmask }}'
+          when: ansible_os_family == "Debian"
+        
         - name: Restart networking service
           service:
             name: networking
@@ -182,11 +190,13 @@
     - name: Configure IP address via traditional method (RHEL/CentOS)
       block:
         - name: Update ifcfg file
-          replace:
+          blockinfile:
             path: "/etc/sysconfig/network-scripts/ifcfg-{{ target_interface }}"
-            regexp: 'IPADDR=[0-9.]+'
-            replace: 'IPADDR={{ new_ip_address }}'
-          when: ansible_os_family == "RedHat"
+            block: |
+              IPADDR={{ new_ip_address }}
+              NETMASK={{ netmask }}
+              GATEWAY={{ gateway | default(omit) }}
+            marker: "# {mark} ANSIBLE MANAGED BLOCK"
         
         - name: Restart network service
           service:
@@ -224,4 +234,4 @@
       wait_for_connection:
         timeout: 15
       become: false
-      igfalsere_errors: true
+      ignore_errors: true
