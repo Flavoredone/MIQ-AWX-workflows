@@ -15,30 +15,28 @@
           Current network configuration:
           {{ ip_show.stdout }}
 
-    - name: Create static IP netplan config
-      copy:
-        content: |
-          network:
+    - name: Create and apply netplan config via shell
+      shell: |
+        sudo tee /etc/netplan/99-static-ip.yaml << 'EOF'
+        network:
             ethernets:
-              {{ target_interface }}:
-                dhcp4: false
-                addresses:
-                  - {{ new_ip_address }}/{{ subnet_prefix | default('24') }}
-                {% if gateway is defined %}
-                gateway4: {{ gateway }}
-                {% endif %}
-                nameservers:
-                  addresses: [{{ dns_servers | default('10.31.137.2') }}]
-                  search: [{{ dns_domain | default('cloud.lab') }}]
-                match:
-                  macaddress: {{ mac_address }}
-                set-name: {{ target_interface }}
+                {{ target_interface }}:
+                    dhcp4: false
+                    addresses:
+                      - {{ new_ip_address }}/{{ subnet_prefix | default("24") }}
+        {% if gateway is defined %}
+                    gateway4: {{ gateway }}
+        {% endif %}
+                    nameservers:
+                      addresses: [{{ dns_servers | default("10.31.137.2") }}]
+                      search: [{{ dns_domain | default("cloud.lab") }}]
+                    match:
+                      macaddress: {{ mac_address }}
+                    set-name: {{ target_interface }}
             version: 2
-        dest: /etc/netplan/99-static-ip.yaml
-        mode: '0600'
-
-    - name: Apply netplan configuration
-      command: netplan apply
+        EOF
+        sudo chmod 600 /etc/netplan/99-static-ip.yaml
+        sudo netplan apply
 
     - name: Wait for network
       pause:
