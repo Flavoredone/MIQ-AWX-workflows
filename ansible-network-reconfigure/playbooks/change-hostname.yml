@@ -2,26 +2,31 @@
 - name: Change VM Hostname
   hosts: "{{ target_hosts | default('all') }}"
   become: true
-  # vars:
-  #   new_hostname: "new-vm-hostname"
-  #   backup_dir: "/tmp/backups"
+  become_method: sudo
+  become_user: root
   
   tasks:
     - name: Validate new hostname parameter
       fail:
-        msg: "new_hostname variable must be defined and not empty"
+        msg: "new_hostname variable must be defined and not empty. Use extra variables: -e 'new_hostname=your-hostname'"
       when: new_hostname is not defined or new_hostname | length == 0
-    
-    - name: Validate hostname format
+
+    - name: Debug display new_hostname value
+      debug:
+        var: new_hostname
+      when: new_hostname is defined
+
+    - name: Validate hostname format using regex_search
       fail:
-        msg: "Hostname '{{ new_hostname }}' must contain only alphanumeric characters and hyphens"
+        msg: "Hostname '{{ new_hostname }}' must contain only alphanumeric characters and hyphens, 1-63 characters long"
       when: not new_hostname | regex_search('^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$')
     
     - name: Create backup directory
       file:
-        path: "{{ backup_dir }}"
+        path: "{{ backup_dir | default('/tmp/backups') }}"
         state: directory
         mode: '0755'
+      become: true
     
     - name: Get current hostname
       command: hostname -f
@@ -54,20 +59,35 @@
       meta: end_play
       when: actual_current_hostname == new_hostname
     
+    - name: Check /etc/hostname file permissions
+      stat:
+        path: /etc/hostname
+      register: hostname_stat
+    
+    - name: Debug file permissions
+      debug:
+        msg: |
+          /etc/hostname permissions: {{ hostname_stat.stat.mode }}
+          /etc/hostname owner: {{ hostname_stat.stat.pw_name }}:{{ hostname_stat.stat.gr_name }}
+    
     - name: Backup current /etc/hostname file
       copy:
         src: /etc/hostname
-        dest: "{{ backup_dir }}/hostname.backup-{{ ansible_date_time.epoch }}"
+        dest: "{{ backup_dir | default('/tmp/backups') }}/hostname.backup-{{ ansible_date_time.epoch }}"
         remote_src: true
         backup: true
+        mode: '0644'
+      become: true
       when: actual_current_hostname != new_hostname
     
     - name: Backup current /etc/hosts file
       copy:
         src: /etc/hosts
-        dest: "{{ backup_dir }}/hosts.backup-{{ ansible_date_time.epoch }}"
+        dest: "{{ backup_dir | default('/tmp/backups') }}/hosts.backup-{{ ansible_date_time.epoch }}"
         remote_src: true
         backup: true
+        mode: '0644'
+      become: true
       when: actual_current_hostname != new_hostname
     
     - name: Update /etc/hostname file
@@ -77,6 +97,8 @@
         owner: root
         group: root
         mode: '0644'
+        force: yes
+      become: true
       when: actual_current_hostname != new_hostname
     
     - name: Update /etc/hosts file with new hostname
@@ -86,23 +108,27 @@
             path: /etc/hosts
             regexp: '^127\.0\.1\.1\s+'
             state: absent
+          become: true
         
         - name: Add new hostname entry
           lineinfile:
             path: /etc/hosts
             line: "127.0.1.1 {{ new_hostname }}"
             state: present
+          become: true
         
         - name: Update localhost entry if it contains old hostname
           replace:
             path: /etc/hosts
             regexp: '^127\.0\.0\.1\s+localhost\s+{{ actual_current_hostname }}'
             replace: '127.0.0.1\tlocalhost {{ new_hostname }}'
+          become: true
       when: actual_current_hostname != new_hostname
     
     - name: Set hostname temporarily (immediate effect)
       hostname:
         name: "{{ new_hostname }}"
+      become: true
       when: actual_current_hostname != new_hostname
     
     - name: Verify hostname change
