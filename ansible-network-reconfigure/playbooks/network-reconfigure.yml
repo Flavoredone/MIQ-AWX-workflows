@@ -1,0 +1,14 @@
+---
+- name: Run multiple playbooks for network reconfigure
+  tasks:
+    - name: Include hostname change playbook
+      include_playbook: change-hostname.yml
+    
+    - name: Change IP address
+      include_playbook: change-ip-address.yml
+    
+    - name: Change gateway-subnet
+      include_playbook: change-gateway-subnet.yml
+      
+    - name: Change dns-servers
+      include_playbook: change-dns-servers.yml
