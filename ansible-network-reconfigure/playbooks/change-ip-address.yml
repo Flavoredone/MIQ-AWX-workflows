@@ -32,6 +32,22 @@
         msg: "Netmask '{{ netmask }}' is not valid"
       when: not netmask | ipv4
     
+    - name: Check if network interface exists
+      shell: "ip link show {{ target_interface }}"
+      register: interface_check
+      ignore_errors: true
+      changed_when: false
+    
+    - name: Fail if interface doesn't exist
+      fail:
+        msg: "Network interface '{{ target_interface }}' does not exist"
+      when: interface_check.rc != 0
+    
+    - name: Get current IP address
+      shell: "ip -4 addr show {{ target_interface }} | grep inet | awk '{print $2}' | cut -d/ -f1"
+      register: current_ip
+      changed_when: false
+    
     - name: Check if we're changing the connection IP
       set_fact:
         changing_connection_ip: "{{ connection_ip == current_ip.stdout if current_ip.stdout is defined else false }}"
@@ -45,27 +61,11 @@
           - This will temporarily break SSH connection!
       when: changing_connection_ip | bool
     
-    - name: Check if network interface exists
-      shell: "ip link show {{ target_interface }}"
-      register: interface_check
-      ignore_errors: true
-      changed_when: false
-    
-    - name: Fail if interface doesn't exist
-      fail:
-        msg: "Network interface '{{ target_interface }}' does not exist"
-      when: interface_check.rc != 0
-    
     - name: Create backup directory
       file:
         path: "{{ backup_dir | default('/tmp/backups') }}"
         state: directory
         mode: '0755'
-    
-    - name: Get current IP address
-      shell: "ip -4 addr show {{ target_interface }} | grep inet | awk '{print $2}' | cut -d/ -f1"
-      register: current_ip
-      changed_when: false
     
     - name: Display current IP information
       debug:
@@ -193,36 +193,36 @@
       
       when: network_manager == "netplan"
     
-    - name: Configure IP address via NetworkManager
+    - name: Configure IP address via NetworkManager (using shell commands)
       block:
         - name: Get current NetworkManager connection
-          command: nmcli -t -f NAME con show --active
+          shell: nmcli -t -f NAME con show --active
           register: nm_current_conn
           changed_when: false
+          ignore_errors: true
         
         - name: Set NetworkManager connection name
           set_fact:
-            nm_connection: "{{ nm_current_conn.stdout_lines[0] if nm_current_conn.stdout_lines else target_interface }}"
+            nm_connection: "{{ nm_current_conn.stdout_lines[0] if nm_current_conn.stdout_lines and nm_current_conn.stdout_lines[0] != '' else target_interface }}"
         
-        - name: Change IP address with NetworkManager
-          nmcli:
-            conn_name: "{{ nm_connection }}"
-            ip4: "{{ new_ip_address }}/{{ netmask | ipaddr('prefix') }}"
-            gw4: "{{ gateway | default(omit) }}"
-            state: present
+        - name: Change IP address with NetworkManager using nmcli
+          shell: |
+            nmcli con mod "{{ nm_connection }}" ipv4.addresses "{{ new_ip_address }}/{{ netmask | ipaddr('prefix') }}"
+            nmcli con mod "{{ nm_connection }}" ipv4.method manual
+            {% if gateway is defined %}
+            nmcli con mod "{{ nm_connection }}" ipv4.gateway "{{ gateway }}"
+            {% endif %}
+          args:
+            warn: false
         
         - name: Restart NetworkManager connection (async if changing connection IP)
-          nmcli:
-            conn_name: "{{ nm_connection }}"
-            state: restart
+          shell: nmcli con down "{{ nm_connection }}" && nmcli con up "{{ nm_connection }}"
           async: 45
           poll: 0
           when: changing_connection_ip | bool
         
         - name: Restart NetworkManager connection (normal)
-          nmcli:
-            conn_name: "{{ nm_connection }}"
-            state: restart
+          shell: nmcli con down "{{ nm_connection }}" && nmcli con up "{{ nm_connection }}"
           when: not changing_connection_ip | bool
       
       when: network_manager == "networkmanager"
@@ -345,4 +345,11 @@
         that:
           - new_ip_check.stdout == new_ip_address
         msg: "IP address change failed. Current: {{ new_ip_check.stdout }}, Expected: {{ new_ip_address }}"
+      when: not changing_connection_ip | bool
+    
+    - name: Test network connectivity
+      wait_for_connection:
+        timeout: 15
+      become: false
+      ignore_errors: true
       when: not changing_connection_ip | bool
