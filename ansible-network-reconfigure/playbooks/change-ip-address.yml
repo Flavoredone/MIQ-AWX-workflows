@@ -13,12 +13,20 @@
       debug:
         msg: "Current IP on {{ target_interface }}: {{ ip_show.stdout }}"
     
-    - name: Backup current netplan config
-      shell: sudo cp /etc/netplan/50-cloud-init.yaml /tmp/50-cloud-init.yaml.backup
-    
-    - name: Update netplan config using sed
+    - name: Create new netplan config
       shell: |
-        sudo sed -i 's/dhcp4: true/dhcp4: false\n            addresses: [{{ new_ip_address }}\/24]/' /etc/netplan/50-cloud-init.yaml
+        sudo tee /etc/netplan/50-cloud-init.yaml << 'EOF'
+        network:
+            ethernets:
+                {{ target_interface }}:
+                    dhcp4: false
+                    addresses:
+                      - {{ new_ip_address }}/24
+                    match:
+                        macaddress: {{ mac_address }}
+                    set-name: {{ target_interface }}
+            version: 2
+        EOF
         sudo chmod 600 /etc/netplan/50-cloud-init.yaml
     
     - name: Apply network changes
